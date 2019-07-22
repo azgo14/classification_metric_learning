@@ -1,0 +1,165 @@
+#!/bin/bash -ex
+#
+# This command launches a docker container and mounts this directory.
+# This tool simply makes the interface to docker a bit easier
+#
+# Arguments:
+#
+#     -h
+#         Display help.
+#     -l
+#         Run local docker image, without pulling from ECR. Useful for testing
+#         local Docker builds before publishing, ie via docker/docker-build.sh
+#     CMD ARG0 ARG1 ... ARGN
+#         The command you'd like to run within the Docker context.
+#
+# Usage:
+#
+#     pdoc [-h] [-l] [CMD ARG0 ARG1 ... ARGN]
+#
+# Examples:
+#
+#     # Enter interactive console within Docker context as root
+#     export PATH=$HOME/code/multitask_visual_embeddings/bin:$PATH
+#     cd $HOME/code/multitask_visual_embeddings
+#     pdoc bash
+#
+#     # Run local Docker image (don't pull from ECR)
+#     pdoc -l bash
+#
+#     # Command with multiple arguments
+#     pdoc ls /
+#
+# Note: only tested on linux
+#
+
+OS=$(uname)
+
+READLINK="readlink"
+if [ "$OS" = "Darwin" ]; then
+  GREADLINK=$(which greadlink)
+  if [ "${GREADLINK}" = "" ]; then
+    brew install coreutils
+  fi
+  READLINK="greadlink"
+fi
+
+_SELF_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# BEGIN parse arguments
+# https://stackoverflow.com/questions/192249/how-do-i-parse-command-line-arguments-in-bash
+# A POSIX variable
+OPTIND=1         # Reset in case getopts has been used previously in the shell.
+
+# Initialize our own variables:
+DEFAULT_DOCKERFILE="$(dirname $(${READLINK} -f $0))/Dockerfile"
+DOCKERFILE=$DEFAULT_DOCKERFILE
+RUN_LOCAL=0
+
+while getopts "h?ld:" opt; do
+    case "$opt" in
+    h|\?)
+        echo "Usage: pdoc [-h] [-l] [CMD ARG0 ARG1 ... ARGN]"
+        exit 0
+        ;;
+    l)  RUN_LOCAL=1
+        ;;
+    esac
+done
+
+shift $((OPTIND-1))
+
+[ "$1" = "--" ] && shift
+
+# If command is "pdoc ls /", then USER_CMD_AND_ARGS is: "ls /""
+USER_CMD_AND_ARGS=$@
+# END parse arguments
+
+PROD_VERSION=$(cat DOCKER_TAG)
+
+# Custom arguments
+PROD_IMAGE=pinterestdocker/visualembedding:$PROD_VERSION
+
+# https://stackoverflow.com/questions/7444504/explanation-of-colon-operator-in-foo-value
+# Essentially defaults for environment variables that can be overwritten
+: ${DOCKER_IMAGE=$PROD_IMAGE}
+: ${DOCKER_INTERACTIVE=-i}
+
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+NC='\033[0m' # No Color
+if [ -x "$(command -v nvidia-docker)" ]; then
+  echo -e "${GREEN}nvidia-docker is being used (GPU + CPU)${NC}\n"
+  DOCKER_CMD="nvidia-docker run"
+elif [ -x "$(command -v docker)" ]; then
+  echo -e "${YELLOW}docker is being used (CPU only)${NC}\n"
+  DOCKER_CMD="docker run --runtime=nvidia"
+else
+  echo -e "${RED}No docker/nvidia-docker installed!!!${NC}"
+  exit 1
+fi
+
+# Mount commonly used directories
+MOUNT_ARGS="-v /tmp:/tmp"
+if [ -d /data1 ]; then
+  MOUNT_ARGS="${MOUNT_ARGS} -v /data1:/data1"
+fi
+
+KNOX_BIN_DIR=/usr/bin/knox
+KNOX_LIB_DIR=/var/lib/knox
+
+if [ -e ${KNOX_BIN_DIR} ]; then
+  MOUNT_ARGS="${MOUNT_ARGS} -v ${KNOX_BIN_DIR}:${KNOX_BIN_DIR}"
+fi
+if [ -e ${KNOX_LIB_DIR} ]; then
+  MOUNT_ARGS="${MOUNT_ARGS} -v ${KNOX_LIB_DIR}:${KNOX_LIB_DIR}"
+fi
+
+# Get the directory of this script.
+DIR=$(dirname $(${READLINK} -f $0))
+MVE_DIR=$(${READLINK} -f $DIR/../..)
+DOCKER_MVE_DIR=/multitask_visual_embeddings
+ABS_PWD=$(${READLINK} -f $PWD | sed "s#$MVE_DIR#$DOCKER_MVE_DIR#g")
+
+echo "" > $MVE_DIR/docker/.docker_log
+ENV_FILE=$MVE_DIR/docker/.docker_env
+
+cat > $ENV_FILE << EOL
+DOCKER_MVE_DIR=$DOCKER_MVE_DIR
+DOCKER_LOG=$DOCKER_MVE_DIR/docker/.docker_log
+LC_ALL=C
+AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
+AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN
+PYTHONPATH=$DOCKER_MVE_DIR
+
+https_proxy=$https_proxy
+http_proxy=$http_proxy
+no_proxy=$no_proxy
+EOL
+
+if [ $DOCKER_IMAGE = $PROD_IMAGE ] && [ $RUN_LOCAL -eq 0 ]; then
+  echo "Pulling docker image version ${PROD_VERSION}"
+  docker pull $DOCKER_IMAGE
+fi
+
+# run inside bash to allow ^C handling correctly
+# https://github.com/bodil/pulp/issues/87
+# https://github.com/docker/docker/pull/12228
+# https://github.com/docker/docker/issues/12022
+#
+# ipc=host needed to ensure inter process communication has enough
+# shared memory space. https://github.com/pytorch/pytorch/issues/1158
+#
+# Run the docker image.
+$DOCKER_CMD \
+  --env-file=$ENV_FILE \
+  --network=host \
+  --ipc=host \
+  -t ${DOCKER_INTERACTIVE} \
+  -w $ABS_PWD \
+  -v $MVE_DIR:$DOCKER_MVE_DIR \
+  -v $HOME/docker_root:/root \
+  $MOUNT_ARGS \
+  $DOCKER_IMAGE bash -c "$USER_CMD_AND_ARGS"
