@@ -97,3 +97,6 @@ Binary Features: R@1, R@10, R@100, R@1000: 78.03 & 90.71 & 96.24 & 98.72
 (May differ slightly because of random seed)\
 Raw Features: R@1, R@10, R@20, R@30, R@40, R@50: 89.35 & 97.81 & 98.61 & 98.87 & 99.05 & 99.13\
 Binary Features: R@1, R@10, R@20, R@30, R@40, R@50: 88.76 & 97.65 & 98.47 & 98.73 & 98.94 & 99.05
+
+## References / re-implementations
+- The Computer Vision Best Practices repository: [02_state_of_the_art.ipynb](https://github.com/microsoft/computervision-recipes/blob/master/scenarios/similarity/02_state_of_the_art.ipynb)
