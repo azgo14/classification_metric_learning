@@ -7,7 +7,7 @@ matplotlib==2.1.0
 pyfakefs==3.2
 scikit-learn==0.17.1
 ipdb==0.8.1
-urllib3==1.24.2
+urllib3==1.26.5
 Bottleneck==1.2.1
 pretrainedmodels==0.7.4
 hickle==3.2.2
